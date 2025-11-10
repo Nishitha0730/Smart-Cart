@@ -1,0 +1,90 @@
+-- SmartCart Quick Setup SQL
+-- Run this entire script in your Supabase SQL Editor
+
+-- 1. Create carts table
+CREATE TABLE IF NOT EXISTS carts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "cartId" TEXT UNIQUE NOT NULL,
+  status TEXT DEFAULT 'available',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 2. Create shopping_sessions table
+CREATE TABLE IF NOT EXISTS shopping_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "sessionId" TEXT UNIQUE NOT NULL,
+  "cartId" TEXT NOT NULL,
+  "userId" TEXT NOT NULL,
+  status TEXT DEFAULT 'active',
+  "startedAt" BIGINT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 3. Create products table
+CREATE TABLE IF NOT EXISTS products (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "productId" TEXT UNIQUE NOT NULL,
+  barcode TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  price DECIMAL(10,2) NOT NULL,
+  category TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 4. Create session_items table
+CREATE TABLE IF NOT EXISTS session_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "itemId" TEXT UNIQUE NOT NULL,
+  "sessionId" TEXT NOT NULL,
+  "productId" TEXT NOT NULL,
+  barcode TEXT NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  "unitPrice" DECIMAL(10,2) NOT NULL,
+  "totalPrice" DECIMAL(10,2) NOT NULL,
+  "scannedBy" TEXT DEFAULT 'customer',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 5. Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_carts_cartId ON carts("cartId");
+CREATE INDEX IF NOT EXISTS idx_carts_status ON carts(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_sessionId ON shopping_sessions("sessionId");
+CREATE INDEX IF NOT EXISTS idx_sessions_cartId ON shopping_sessions("cartId");
+CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
+CREATE INDEX IF NOT EXISTS idx_session_items_sessionId ON session_items("sessionId");
+
+-- 6. Insert test cart (this is what the app will use)
+INSERT INTO carts ("cartId", status)
+VALUES ('CART_001', 'available')
+ON CONFLICT ("cartId") DO NOTHING;
+
+-- 7. Insert additional test carts
+INSERT INTO carts ("cartId", status)
+VALUES
+  ('CART_002', 'available'),
+  ('CART_003', 'available'),
+  ('CART_004', 'available')
+ON CONFLICT ("cartId") DO NOTHING;
+
+-- 8. Insert test products
+INSERT INTO products ("productId", barcode, name, price, category)
+VALUES
+  ('PROD_001', '1234567890123', 'Apple iPhone 15', 999.99, 'Electronics'),
+  ('PROD_002', '2345678901234', 'Samsung Galaxy S24', 899.99, 'Electronics'),
+  ('PROD_003', '3456789012345', 'Coca Cola 500ml', 2.50, 'Beverages'),
+  ('PROD_004', '4567890123456', 'Lays Chips', 3.99, 'Snacks'),
+  ('PROD_005', '5678901234567', 'Milk 1L', 4.50, 'Dairy'),
+  ('PROD_006', '6789012345678', 'Bread Loaf', 2.99, 'Bakery'),
+  ('PROD_007', '7890123456789', 'Orange Juice 1L', 5.99, 'Beverages'),
+  ('PROD_008', '8901234567890', 'Chocolate Bar', 1.99, 'Snacks')
+ON CONFLICT ("productId") DO NOTHING;
+
+-- 9. Verify setup
+SELECT 'Carts created:' as info, COUNT(*) as count FROM carts
+UNION ALL
+SELECT 'Products created:' as info, COUNT(*) as count FROM products;
+
+-- Done! You should see:
+-- Carts created: 4
+-- Products created: 8
+

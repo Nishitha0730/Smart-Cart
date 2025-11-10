@@ -16,16 +16,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-
-data class CartItem(val id: Int, val name: String, val description: String, val price: Double, var quantity: Int, val imageUrl: String)
+import com.example.smartcart.SupabaseManager
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CartScreen(navController: NavController) {
-    val cartItems = remember { mutableStateListOf(
-        CartItem(1, "Sugar free gold", "bottle of 500 pallets", 25.0, 1, ""),
-        CartItem(2, "Sugar free gold", "bottle of 500 pallets", 18.0, 1, ""),
-    ) }
+    val scope = rememberCoroutineScope()
+    val currentSession by SupabaseManager.currentSession.collectAsState(initial = null)
+    val cartItems by SupabaseManager.cartItems.collectAsState(initial = emptyList())
+
+    // Load cart items when screen opens
+    LaunchedEffect(currentSession) {
+        currentSession?.let { session ->
+            SupabaseManager.loadSessionItems(session.sessionId)
+        }
+    }
+
+    // Calculate totals
+    val subtotal = cartItems.sumOf { it.totalPrice }
+    val discount = 0.0 // You can calculate discounts here
+    val total = subtotal - discount
 
     Scaffold(
         topBar = {
@@ -89,51 +100,175 @@ fun CartScreen(navController: NavController) {
                 .padding(paddingValues)
                 .background(Color.White)
         ) {
-            Text(
-                text = "${cartItems.size} Items in your cart",
-                color = Color.Black,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(16.dp)
-            )
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                items(cartItems) { item ->
-                    CartItemCard(item = item, onQuantityChange = { updatedItem ->
-                        val index = cartItems.indexOfFirst { it.id == updatedItem.id }
-                        if (index != -1) {
-                            cartItems[index] = updatedItem
+            if (currentSession == null) {
+                // No active session - show empty state
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Filled.ShoppingCart,
+                            contentDescription = null,
+                            modifier = Modifier.size(80.dp),
+                            tint = Color.Gray
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "No active shopping session",
+                            fontSize = 18.sp,
+                            color = Color.Gray,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { navController.navigate("scan") },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F51B5))
+                        ) {
+                            Text("Scan Cart QR")
                         }
-                    },
-                    onRemove = { itemToRemove ->
-                        cartItems.remove(itemToRemove)
-                    })
+                    }
                 }
-            }
-            Button(
-                onClick = { navController.navigate("checkout") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F51B5)),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("Place Order", color = Color.White, fontSize = 18.sp)
+            } else if (cartItems.isEmpty()) {
+                // Session active but cart empty
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Filled.ShoppingCart,
+                            contentDescription = null,
+                            modifier = Modifier.size(80.dp),
+                            tint = Color.Gray
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Your cart is empty",
+                            fontSize = 18.sp,
+                            color = Color.Gray,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Start scanning items to add them!",
+                            fontSize = 14.sp,
+                            color = Color.Gray
+                        )
+                    }
+                }
+            } else {
+                // Cart has items - show them
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${cartItems.size} Items in your cart",
+                        color = Color.Black,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    // Real-time indicator
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(Color.Green, shape = RoundedCornerShape(4.dp))
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Live", fontSize = 12.sp, color = Color.Gray)
+                    }
+                }
+
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(cartItems, key = { it.itemId }) { item ->
+                        CartItemCard(
+                            item = item,
+                            onQuantityChange = { newQuantity ->
+                                scope.launch {
+                                    SupabaseManager.updateItemQuantity(item.itemId, newQuantity)
+                                }
+                            },
+                            onRemove = {
+                                scope.launch {
+                                    SupabaseManager.removeItem(item.itemId)
+                                }
+                            }
+                        )
+                    }
+                }
+
+                // Cart summary
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Subtotal:", fontSize = 16.sp, color = Color.Gray)
+                            Text("Rs.%.2f".format(subtotal), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                        if (discount > 0) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Discount:", fontSize = 16.sp, color = Color.Gray)
+                                Text("-Rs.%.2f".format(discount), fontSize = 16.sp, color = Color.Red)
+                            }
+                        }
+                        Divider(modifier = Modifier.padding(vertical = 8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Total:", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                "Rs.%.2f".format(total),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF3F51B5)
+                            )
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = { navController.navigate("checkout") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F51B5)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Place Order", color = Color.White, fontSize = 18.sp)
+                }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CartItemCard(
-    item: CartItem,
-    onQuantityChange: (CartItem) -> Unit,
-    onRemove: (CartItem) -> Unit
+    item: com.example.smartcart.SessionItem,
+    onQuantityChange: (Int) -> Unit,
+    onRemove: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -144,50 +279,68 @@ fun CartItemCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Placeholder for product image
+            // Product image placeholder
             Box(
                 modifier = Modifier
                     .size(80.dp)
-                    .background(Color.LightGray.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(
-                modifier = Modifier.weight(1f)
+                    .background(Color.LightGray.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
             ) {
+                Icon(
+                    imageVector = Icons.Filled.ShoppingBag,
+                    contentDescription = null,
+                    tint = Color.Gray,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = item.name,
+                    text = "Product ${item.barcode.takeLast(4)}",
                     color = Color.Black,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = item.description,
+                    text = "Barcode: ${item.barcode}",
                     color = Color.Gray,
                     fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 4.dp)
+                    modifier = Modifier.padding(top = 2.dp)
                 )
                 Text(
-                    text = "Rs.${item.price}",
-                    color = Color.Black,
+                    text = "Rs.%.2f".format(item.unitPrice),
+                    color = Color(0xFF3F51B5),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = 4.dp)
                 )
+                // Show if scanned by ESP32
+                if (item.scannedBy == "esp32") {
+                    Text(
+                        text = "Scanned by ESP32",
+                        color = Color.Green,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
+
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                IconButton(onClick = { onRemove(item) }) {
+                IconButton(onClick = onRemove) {
                     Icon(Icons.Filled.Close, contentDescription = "Remove item", tint = Color.Gray)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
-                        onClick = { if (item.quantity > 1) onQuantityChange(item.copy(quantity = item.quantity - 1)) },
+                        onClick = { if (item.quantity > 1) onQuantityChange(item.quantity - 1) },
                         modifier = Modifier.size(32.dp),
                         colors = IconButtonDefaults.iconButtonColors(containerColor = Color(0xFFE0E0E0))
                     ) {
-                        Icon(Icons.Filled.Remove, contentDescription = "Decrease quantity", tint = Color.Black)
+                        Icon(Icons.Filled.Remove, contentDescription = "Decrease", tint = Color.Black)
                     }
                     Text(
                         text = "${item.quantity}",
@@ -196,11 +349,11 @@ fun CartItemCard(
                         fontWeight = FontWeight.Medium
                     )
                     IconButton(
-                        onClick = { onQuantityChange(item.copy(quantity = item.quantity + 1)) },
+                        onClick = { onQuantityChange(item.quantity + 1) },
                         modifier = Modifier.size(32.dp),
                         colors = IconButtonDefaults.iconButtonColors(containerColor = Color(0xFFE0E0E0))
                     ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Increase quantity", tint = Color.Black)
+                        Icon(Icons.Filled.Add, contentDescription = "Increase", tint = Color.Black)
                     }
                 }
             }

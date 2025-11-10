@@ -23,6 +23,8 @@ kotlin.code.style=official
 android.nonTransitiveRClass=true
 
 # Supabase Configuration
-SUPABASE_URL=https://thxzuiypgjwuwgiojwlq.supabase.co
-SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRoeHp1aXlwZ2p3dXdnaW9qd2xxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3MDc0OTgsImV4cCI6MjA3ODI4MzQ5OH0.7Lqmvh4-H9VVnTBj6MOQ5SeNVDPVqhJQWBpZiYLcKF0
+# Copy this file to gradle.properties and fill in your actual credentials
+# Get them from: https://app.supabase.com/project/_/settings/api
+SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_KEY=your-anon-public-key-here
 

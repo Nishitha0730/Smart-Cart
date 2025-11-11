@@ -171,7 +171,7 @@ object SupabaseManager {
                     append("Content-Type", "application/json")
                     append("Prefer", "return=representation")
                 }
-                setBody(mapOf("status" to "in_use"))
+                setBody(CartStatusUpdate(status = "in_use"))
             }
 
             _currentSession.value = session
@@ -284,7 +284,7 @@ object SupabaseManager {
                         append("Accept", "application/json")
                         append("Content-Type", "application/json")
                     }
-                    setBody(mapOf("quantity" to newQuantity, "totalPrice" to newTotal))
+                    setBody(ItemQuantityUpdate(quantity = newQuantity, totalPrice = newTotal))
                 }
                 val updated = item.copy(quantity = newQuantity, totalPrice = newTotal)
                 Result.success(updated)
@@ -345,7 +345,7 @@ object SupabaseManager {
                     append("Accept", "application/json")
                     append("Content-Type", "application/json")
                 }
-                setBody(mapOf("quantity" to newQuantity, "totalPrice" to newTotal))
+                setBody(ItemQuantityUpdate(quantity = newQuantity, totalPrice = newTotal))
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -412,7 +412,11 @@ object SupabaseManager {
                     append("Accept", "application/json")
                     append("Content-Type", "application/json")
                 }
-                setBody(mapOf("status" to "completed", "completedAt" to System.currentTimeMillis(), "totalAmount" to totalAmount))
+                setBody(SessionCompletionUpdate(
+                    status = "completed",
+                    completedAt = System.currentTimeMillis(),
+                    totalAmount = totalAmount
+                ))
             }
 
             // free up cart
@@ -425,7 +429,7 @@ object SupabaseManager {
                     append("Accept", "application/json")
                     append("Content-Type", "application/json")
                 }
-                setBody(mapOf("status" to "available"))
+                setBody(CartStatusUpdate(status = "available"))
             }
 
             _currentSession.value = null
@@ -494,5 +498,24 @@ data class Order(
     val paymentMethod: String,
     val paymentStatus: String,
     val orderStatus: String
+)
+
+// Update request bodies
+@Serializable
+data class CartStatusUpdate(
+    val status: String
+)
+
+@Serializable
+data class SessionCompletionUpdate(
+    val status: String,
+    val completedAt: Long,
+    val totalAmount: Double
+)
+
+@Serializable
+data class ItemQuantityUpdate(
+    val quantity: Int,
+    val totalPrice: Double
 )
 

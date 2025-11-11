@@ -64,11 +64,22 @@ fun ThankYouScreen(navController: NavController) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Your cart has been released and is now available for other shoppers.",
+                color = Color(0xFF4CAF50),
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
             Spacer(modifier = Modifier.height(60.dp))
             Button(
-                onClick = { navController.navigate("signIn") {
-                    popUpTo("home") { inclusive = true }
-                }},
+                onClick = {
+                    navController.navigate("signIn") {
+                        // Clear entire back stack
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F51B5)),
                 shape = RoundedCornerShape(8.dp)

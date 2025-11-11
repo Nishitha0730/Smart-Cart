@@ -1,5 +1,6 @@
 package com.example.smartcart.ui.screens
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,11 +16,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.example.smartcart.SupabaseManager
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheckoutScreen(navController: NavController) {
     var selectedPaymentMethod by remember { mutableStateOf("PayHere") }
+    var isProcessing by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // Collect current session
+    val currentSession by SupabaseManager.currentSession.collectAsState(initial = null)
 
     Scaffold(
         topBar = {
@@ -145,8 +154,59 @@ fun CheckoutScreen(navController: NavController) {
 
             Spacer(modifier = Modifier.weight(1f))
 
+            // Show error message if any
+            errorMessage?.let { error ->
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+
             Button(
-                onClick = { navController.navigate("thankyou") },
+                onClick = {
+                    scope.launch {
+                        isProcessing = true
+                        errorMessage = null
+
+                        val session = currentSession
+                        if (session == null) {
+                            errorMessage = "No active session found"
+                            isProcessing = false
+                            return@launch
+                        }
+
+                        try {
+                            val result = SupabaseManager.completeCheckout(
+                                sessionId = session.sessionId,
+                                paymentMethod = selectedPaymentMethod,
+                                discountAmount = 44.60 // Total discount from UI (28.80 + 15.80)
+                            )
+
+                            result.fold(
+                                onSuccess = {
+                                    Log.i("CheckoutScreen", "Checkout completed successfully")
+                                    // Navigate to thank you screen
+                                    navController.navigate("thankyou") {
+                                        // Clear back stack so user can't go back to checkout
+                                        popUpTo("home") { inclusive = false }
+                                    }
+                                },
+                                onFailure = { exception ->
+                                    Log.e("CheckoutScreen", "Checkout failed", exception)
+                                    errorMessage = exception.message ?: "Checkout failed"
+                                    isProcessing = false
+                                }
+                            )
+                        } catch (e: Exception) {
+                            Log.e("CheckoutScreen", "Exception during checkout", e)
+                            errorMessage = e.message ?: "An error occurred"
+                            isProcessing = false
+                        }
+                    }
+                },
+                enabled = !isProcessing && currentSession != null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)
@@ -154,7 +214,14 @@ fun CheckoutScreen(navController: NavController) {
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F51B5)),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("Pay Now", color = Color.White, fontSize = 18.sp)
+                if (isProcessing) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                } else {
+                    Text("Pay Now", color = Color.White, fontSize = 18.sp)
+                }
             }
         }
     }

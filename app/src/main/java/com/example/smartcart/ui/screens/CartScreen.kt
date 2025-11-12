@@ -26,9 +26,19 @@ fun CartScreen(navController: NavController) {
     val currentSession by SupabaseManager.currentSession.collectAsState(initial = null)
     val cartItems by SupabaseManager.cartItems.collectAsState(initial = emptyList())
 
+    // Debug logging
+    LaunchedEffect(cartItems) {
+        android.util.Log.d("CartScreen", "📦 Cart items changed: ${cartItems.size} items")
+        cartItems.forEach { item ->
+            android.util.Log.d("CartScreen", "  - ${item.barcode}: qty ${item.quantity}")
+        }
+    }
+
     // Load cart items when screen opens
     LaunchedEffect(currentSession) {
+        android.util.Log.d("CartScreen", "🔄 Session changed: ${currentSession?.sessionId}")
         currentSession?.let { session ->
+            android.util.Log.d("CartScreen", "Loading items for session: ${session.sessionId}")
             SupabaseManager.loadSessionItems(session.sessionId)
         }
     }

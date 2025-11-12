@@ -11,6 +11,8 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.Serializable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
@@ -97,12 +99,63 @@ object SupabaseManager {
 
     // Current active session
     private val _currentSession = MutableStateFlow<ShoppingSession?>(null)
-    val currentSession: Flow<ShoppingSession?> = _currentSession
+    val currentSession: StateFlow<ShoppingSession?> = _currentSession.asStateFlow()
 
     // Cart items in current session
     private val _cartItems = MutableStateFlow<List<SessionItem>>(emptyList())
-    val cartItems: Flow<List<SessionItem>> = _cartItems
+    val cartItems: StateFlow<List<SessionItem>> = _cartItems.asStateFlow()
 
+
+    /**
+     * Ensure user exists in database (create if not exists)
+     */
+    private suspend fun ensureUserExists(userId: String, userName: String = "Guest User"): Result<Unit> {
+        if (!ensureClient()) return Result.failure(Exception("Supabase client not available"))
+        val http = client!!
+
+        return try {
+            // Check if user exists
+            val users: List<User> = http.get("${baseUrl.trimEnd('/')}/rest/v1/users") {
+                url {
+                    parameters.append("select", "*")
+                    parameters.append("userId", "eq.$userId")
+                }
+                headers {
+                    append("apikey", apiKey)
+                    append("Authorization", "Bearer $apiKey")
+                    append("Accept", "application/json")
+                }
+            }.body()
+
+            if (users.isEmpty()) {
+                // User doesn't exist, create it
+                val newUser = User(
+                    userId = userId,
+                    email = "$userId@smartcart.local",
+                    name = userName,
+                    phone = null
+                )
+
+                http.post("${baseUrl.trimEnd('/')}/rest/v1/users") {
+                    contentType(ContentType.Application.Json)
+                    headers {
+                        append("apikey", apiKey)
+                        append("Authorization", "Bearer $apiKey")
+                        append("Prefer", "return=representation")
+                    }
+                    setBody(newUser)
+                }
+                Log.i("SupabaseManager", "✅ Created new user: $userId")
+            } else {
+                Log.d("SupabaseManager", "ℹ️  User already exists: $userId")
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.w("SupabaseManager", "⚠️ Could not ensure user exists (continuing anyway): ${e.message}")
+            // Don't fail the whole operation if user creation fails
+            Result.success(Unit)
+        }
+    }
 
     /**
      * Start shopping session when QR code is scanned
@@ -116,6 +169,10 @@ object SupabaseManager {
         Log.d("SupabaseManager", "   baseUrl: $baseUrl")
         Log.d("SupabaseManager", "   apiKey length: ${apiKey.length}")
         Log.d("SupabaseManager", "   apiKey first 20 chars: ${apiKey.take(20)}...")
+
+        // Ensure user exists in database (if users table exists)
+        ensureUserExists(userId)
+
 
         return try {
             // GET cart by cartId
@@ -149,32 +206,39 @@ object SupabaseManager {
                 startedAt = System.currentTimeMillis()
             )
 
-            // Insert session
-            http.post("${baseUrl.trimEnd('/')}/rest/v1/shopping_sessions") {
-                headers {
-                    append("apikey", apiKey)
-                    append("Authorization", "Bearer $apiKey")
-                    append("Accept", "application/json")
-                    append("Content-Type", "application/json")
-                    append("Prefer", "return=representation")
+            Log.d("SupabaseManager", "🔄 Creating session in database: ${session.sessionId}")
+
+            // Insert session - MUST succeed or items can't be added
+            try {
+                val response = http.post("${baseUrl.trimEnd('/')}/rest/v1/shopping_sessions") {
+                    contentType(ContentType.Application.Json)
+                    headers {
+                        append("apikey", apiKey)
+                        append("Authorization", "Bearer $apiKey")
+                        append("Prefer", "return=representation")
+                    }
+                    setBody(session)
                 }
-                setBody(session)
+                Log.i("SupabaseManager", "✅ Session created successfully in database")
+            } catch (e: Exception) {
+                Log.e("SupabaseManager", "❌ FAILED to create session in database", e)
+                return Result.failure(Exception("Failed to create shopping session: ${e.message}", e))
             }
 
             // Mark cart as in use
             http.patch("${baseUrl.trimEnd('/')}/rest/v1/carts") {
                 url { parameters.append("cartId", "eq.$cartId") }
+                contentType(ContentType.Application.Json)
                 headers {
                     append("apikey", apiKey)
                     append("Authorization", "Bearer $apiKey")
-                    append("Accept", "application/json")
-                    append("Content-Type", "application/json")
                     append("Prefer", "return=representation")
                 }
                 setBody(CartStatusUpdate(status = "in_use"))
             }
 
             _currentSession.value = session
+            Log.i("SupabaseManager", "✅ Session set in local state: ${session.sessionId}")
 
             // Optionally load items (empty now)
             loadSessionItems(session.sessionId)
@@ -201,6 +265,7 @@ object SupabaseManager {
         if (!ensureClient()) return
         val http = client!!
         try {
+            Log.d("SupabaseManager", "Loading items for session: $sessionId")
             val items: List<SessionItem> = http.get("${baseUrl.trimEnd('/')}/rest/v1/session_items") {
                 url {
                     parameters.append("select", "*")
@@ -213,6 +278,7 @@ object SupabaseManager {
                 }
             }.body()
             _cartItems.value = items.filter { it.sessionId == sessionId }
+            Log.i("SupabaseManager", "✅ Loaded ${_cartItems.value.size} items for session $sessionId")
         } catch (e: Exception) {
             Log.e("SupabaseManager", "Failed to load session items", e)
         }
@@ -242,6 +308,9 @@ object SupabaseManager {
     suspend fun addItemToCart(barcode: String, sessionId: String): Result<SessionItem> {
         if (!ensureClient()) return Result.failure(Exception("Supabase client not available"))
         val http = client!!
+
+        Log.d("SupabaseManager", "🛒 addItemToCart called - barcode: $barcode, sessionId: $sessionId")
+
         return try {
             val products: List<Product> = http.get("${baseUrl.trimEnd('/')}/rest/v1/products") {
                 url {
@@ -256,6 +325,8 @@ object SupabaseManager {
             }.body()
 
             val product = products.firstOrNull() ?: return Result.failure(Exception("Product not found"))
+
+            Log.d("SupabaseManager", "✅ Found product: ${product.name}")
 
             // check existing item in session
             val existing: List<SessionItem> = http.get("${baseUrl.trimEnd('/')}/rest/v1/session_items") {
@@ -272,23 +343,27 @@ object SupabaseManager {
             }.body()
 
             if (existing.isNotEmpty()) {
+                Log.d("SupabaseManager", "Item already exists, updating quantity")
                 val item = existing.first()
                 val newQuantity = item.quantity + 1
                 val newTotal = newQuantity * item.unitPrice
                 // update quantity
                 http.patch("${baseUrl.trimEnd('/')}/rest/v1/session_items") {
                     url { parameters.append("itemId", "eq.${item.itemId}") }
+                    contentType(ContentType.Application.Json)
                     headers {
                         append("apikey", apiKey)
                         append("Authorization", "Bearer $apiKey")
-                        append("Accept", "application/json")
-                        append("Content-Type", "application/json")
                     }
                     setBody(ItemQuantityUpdate(quantity = newQuantity, totalPrice = newTotal))
                 }
                 val updated = item.copy(quantity = newQuantity, totalPrice = newTotal)
+                Log.i("SupabaseManager", "✅ Updated quantity to $newQuantity")
+                // Refresh cart items
+                loadSessionItems(sessionId)
                 Result.success(updated)
             } else {
+                Log.d("SupabaseManager", "Adding new item to cart")
                 val newItem = SessionItem(
                     itemId = UUID.randomUUID().toString(),
                     sessionId = sessionId,
@@ -300,18 +375,21 @@ object SupabaseManager {
                     scannedBy = "customer"
                 )
                 http.post("${baseUrl.trimEnd('/')}/rest/v1/session_items") {
+                    contentType(ContentType.Application.Json)
                     headers {
                         append("apikey", apiKey)
                         append("Authorization", "Bearer $apiKey")
-                        append("Accept", "application/json")
-                        append("Content-Type", "application/json")
+                        append("Prefer", "return=representation")
                     }
                     setBody(newItem)
                 }
+                Log.i("SupabaseManager", "✅ Added new item: ${product.name}")
+                // Refresh cart items
+                loadSessionItems(sessionId)
                 Result.success(newItem)
             }
         } catch (e: Exception) {
-            Log.e("SupabaseManager", "Failed to add item to cart", e)
+            Log.e("SupabaseManager", "❌ Failed to add item to cart", e)
             val errorMsg = when {
                 e.message?.contains("Permission denied", ignoreCase = true) == true ->
                     "Network permission denied. Check internet connection."
@@ -338,17 +416,18 @@ object SupabaseManager {
             val item = items.firstOrNull() ?: return
             val newTotal = newQuantity * item.unitPrice
             http.patch("${baseUrl.trimEnd('/')}/rest/v1/session_items") {
-                url { parameters.append("itemId", "eq.$itemId") }
+                url { parameters.append("itemId", "eq.${item.itemId}") }
+                contentType(ContentType.Application.Json)
                 headers {
                     append("apikey", apiKey)
                     append("Authorization", "Bearer $apiKey")
-                    append("Accept", "application/json")
-                    append("Content-Type", "application/json")
                 }
                 setBody(ItemQuantityUpdate(quantity = newQuantity, totalPrice = newTotal))
             }
+            // Refresh cart items to update display
+            loadSessionItems(item.sessionId)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("SupabaseManager", "Failed to update item quantity", e)
         }
     }
 
@@ -356,6 +435,18 @@ object SupabaseManager {
         if (!ensureClient()) return
         val http = client!!
         try {
+            // Get the item first to get sessionId
+            val items: List<SessionItem> = http.get("${baseUrl.trimEnd('/')}/rest/v1/session_items") {
+                url { parameters.append("select", "*"); parameters.append("itemId", "eq.$itemId") }
+                headers {
+                    append("apikey", apiKey)
+                    append("Authorization", "Bearer $apiKey")
+                    append("Accept", "application/json")
+                }
+            }.body()
+            val item = items.firstOrNull()
+
+            // Delete the item
             http.delete("${baseUrl.trimEnd('/')}/rest/v1/session_items") {
                 url { parameters.append("itemId", "eq.$itemId") }
                 headers {
@@ -364,8 +455,11 @@ object SupabaseManager {
                     append("Accept", "application/json")
                 }
             }
+
+            // Refresh cart items to update display
+            item?.let { loadSessionItems(it.sessionId) }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("SupabaseManager", "Failed to remove item", e)
         }
     }
 
@@ -393,24 +487,62 @@ object SupabaseManager {
                 orderStatus = "completed"
             )
 
+            // 1. Create the order
             http.post("${baseUrl.trimEnd('/')}/rest/v1/orders") {
+                contentType(ContentType.Application.Json)
                 headers {
                     append("apikey", apiKey)
                     append("Authorization", "Bearer $apiKey")
-                    append("Accept", "application/json")
-                    append("Content-Type", "application/json")
                 }
                 setBody(order)
             }
 
-            // mark session completed
+            // 2. Create order items (permanent record of purchased products)
+            for (item in _cartItems.value) {
+                // Get product details for complete record
+                val products: List<Product> = http.get("${baseUrl.trimEnd('/')}/rest/v1/products") {
+                    url {
+                        parameters.append("select", "*")
+                        parameters.append("productId", "eq.${item.productId}")
+                    }
+                    headers {
+                        append("apikey", apiKey)
+                        append("Authorization", "Bearer $apiKey")
+                        append("Accept", "application/json")
+                    }
+                }.body()
+
+                val product = products.firstOrNull()
+
+                val orderItem = OrderItem(
+                    orderItemId = UUID.randomUUID().toString(),
+                    orderId = order.orderId,
+                    productId = item.productId,
+                    productName = product?.name ?: "Unknown Product",
+                    barcode = item.barcode,
+                    quantity = item.quantity,
+                    unitPrice = item.unitPrice,
+                    totalPrice = item.totalPrice,
+                    category = product?.category
+                )
+
+                http.post("${baseUrl.trimEnd('/')}/rest/v1/order_items") {
+                    contentType(ContentType.Application.Json)
+                    headers {
+                        append("apikey", apiKey)
+                        append("Authorization", "Bearer $apiKey")
+                    }
+                    setBody(orderItem)
+                }
+            }
+
+            // 3. Mark session completed
             http.patch("${baseUrl.trimEnd('/')}/rest/v1/shopping_sessions") {
                 url { parameters.append("sessionId", "eq.$sessionId") }
+                contentType(ContentType.Application.Json)
                 headers {
                     append("apikey", apiKey)
                     append("Authorization", "Bearer $apiKey")
-                    append("Accept", "application/json")
-                    append("Content-Type", "application/json")
                 }
                 setBody(SessionCompletionUpdate(
                     status = "completed",
@@ -419,15 +551,13 @@ object SupabaseManager {
                 ))
             }
 
-            // free up cart
+            // 4. Free up cart
             http.patch("${baseUrl.trimEnd('/')}/rest/v1/carts") {
-                // find cart id
                 url { parameters.append("cartId", "eq.${session.cartId}") }
+                contentType(ContentType.Application.Json)
                 headers {
                     append("apikey", apiKey)
                     append("Authorization", "Bearer $apiKey")
-                    append("Accept", "application/json")
-                    append("Content-Type", "application/json")
                 }
                 setBody(CartStatusUpdate(status = "available"))
             }
@@ -435,9 +565,10 @@ object SupabaseManager {
             _currentSession.value = null
             _cartItems.value = emptyList()
 
+            Log.i("SupabaseManager", "✅ Checkout completed: Order ${order.orderId} with ${_cartItems.value.size} items")
             Result.success(order)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("SupabaseManager", "Failed to complete checkout", e)
             Result.failure(e)
         }
     }
@@ -498,6 +629,27 @@ data class Order(
     val paymentMethod: String,
     val paymentStatus: String,
     val orderStatus: String
+)
+
+@Serializable
+data class OrderItem(
+    val orderItemId: String,
+    val orderId: String,
+    val productId: String,
+    val productName: String,
+    val barcode: String,
+    val quantity: Int,
+    val unitPrice: Double,
+    val totalPrice: Double,
+    val category: String? = null
+)
+
+@Serializable
+data class User(
+    val userId: String,
+    val email: String,
+    val name: String,
+    val phone: String? = null
 )
 
 // Update request bodies
